@@ -306,11 +306,12 @@
         </div>
     </div>
 
-    <script>
-       
+<script>
+        // ==========================================
+        // 1. 密碼驗證區 (SHA-256: 6952)
+        // ==========================================
         const CORRECT_HASH = "951475c4044eb985db586c556b694723141f0217277d704543787a2a53702581";
 
-       
         async function sha256(message) {
             const msgBuffer = new TextEncoder().encode(message);
             const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
@@ -318,35 +319,58 @@
             return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         }
 
-        // 修改後的檢查密碼函式
         async function checkPassword() {
             const inputField = document.getElementById('password-input');
             const msg = document.getElementById('auth-msg');
             const inputVal = inputField.value;
 
-            // 如果沒輸入內容，不執行
             if (!inputVal) return;
 
-            // 計算使用者輸入內容的 Hash
             const hash = await sha256(inputVal);
             
-            // 比對雜湊值
             if (hash === CORRECT_HASH) {
-                // 密碼正確：解鎖
                 document.getElementById('lock-screen').classList.add('hidden-overlay');
                 document.getElementById('loading-overlay').classList.remove('hidden');
                 
-                // 啟動應用程式邏輯
+                // 解鎖後才開始跑這兩個重要功能
                 renderList(); 
                 startGlobalSync();
             } else {
-                // 密碼錯誤
                 inputField.value = '';
                 msg.innerText = "密碼錯誤";
                 inputField.classList.add('shake');
                 setTimeout(() => inputField.classList.remove('shake'), 500);
             }
         }
+
+        // ==========================================
+        // 2. 全域變數宣告 (原本缺少的這一塊)
+        // ==========================================
+        const apiKey = ""; 
+        const INITIAL_STATE = {
+            'p1': { name: '阿公', stocks: [{ symbol: 'CTBB', shares: 550, cost: 9.81 }, { symbol: 'CTDD', shares: 5200, cost: 10.94 }, { symbol: 'QVCC', shares: 1700, cost: 9.89 }, { symbol: 'GLOP-A', shares: 2440, cost: 21.09 }, { symbol: 'SEAL-B', shares: 1000, cost: 24.97 }] },
+            'p2': { name: '健治', stocks: [{ symbol: 'NVDA', shares: 100, cost: 185 }, { symbol: 'GOOGL', shares: 100, cost: 192 }, { symbol: 'SNDK', shares: 20, cost: 658 }, { symbol: 'AVGO', shares: 20, cost: 347 }, { symbol: 'UZF', shares: 1000, cost: 18.5 }] },
+            'p3': { name: '阿嬤', stocks: [{ symbol: 'CTBB', shares: 450, cost: 9.32 }, { symbol: 'GLOP-A', shares: 1100, cost: 22.11 }, { symbol: 'GLOP-B', shares: 255, cost: 21.87 }, { symbol: 'QQQ', shares: 30, cost: 572.53 }, { symbol: 'SEAL-B', shares: 1500, cost: 25.36 }, { symbol: 'TBB', shares: 900, cost: 22.29 }] }
+        };
+
+        const STORAGE_KEY = 'portfolio_tri_v600_stable';
+        let store = JSON.parse(localStorage.getItem(STORAGE_KEY)) || INITIAL_STATE;
+        let currentId = 'p1', filterSelection = ['p1', 'p2', 'p3'], cache = {}, tChart, pChartA, pChartS, tf = 7, usdToTwd = null;
+        let syncedSet = new Set(), timer = null, chartSyncTimer = null;
+        let initialChartLoaded = false;
+        let isAppUnlocked = false; 
+
+        // 初始化監聽 (聚焦輸入框)
+        window.onload = () => { 
+            document.getElementById('password-input').focus();
+            document.getElementById('password-input').addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') checkPassword();
+            });
+        };
+
+        // ==========================================
+        // 3. 功能函式 (save, switchUser 等)
+        // ==========================================
 
         function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); }
 
@@ -363,6 +387,7 @@
             
             renderList(); 
             updateSummary(); 
+            // 切換分頁時立即刷新一次圖表
             updateTrendChart();
             if (isTotal) renderPieCharts();
             renderDividendTable();
@@ -403,20 +428,18 @@
         }
 
         async function executeSyncBatch(symbols) {
-            const totalItems = symbols.length + 1; // +1 for FX
+            const totalItems = symbols.length + 1; 
             if (!usdToTwd) fetchFX().then(s => { 
                 if(s) markSynced('FX_KEY', totalItems); 
             });
             
             symbols.forEach(sym => {
-                // 如果該代碼還沒被同步過，執行抓取
                 if (!syncedSet.has(sym)) {
                     updateLoadingScreen(syncedSet.size, totalItems, `同步中: ${sym}...`);
                     fetchYahoo(sym).then(d => {
                         if (d) { 
                             cache[sym] = d; 
                             markSynced(sym, totalItems); 
-                            // 即使在背景 loading，若資料抓到了也可以先 render 準備好
                             if (getActiveStocks().some(s => s.symbol === sym)) { 
                                 renderList(); 
                                 updateSummary(); 
@@ -438,38 +461,31 @@
 
         /**
          * 標記同步與圖表冷卻邏輯
-         * 修改：加入解鎖主畫面的邏輯
          */
         function markSynced(id, totalNeeded) {
-            if (syncedSet.has(id)) return; // 避免重複計數
+            if (syncedSet.has(id)) return; 
             syncedSet.add(id);
             
             updateLoadingScreen(syncedSet.size, totalNeeded);
             
-            // App 內部的進度條
             const pct = Math.min(Math.round((syncedSet.size / totalNeeded) * 100), 100);
             document.getElementById('progress-bar').style.width = `${pct}%`;
             
-            // 判斷是否全部完成
             if (syncedSet.size >= totalNeeded) {
-                // 1. UI 狀態更新
                 document.getElementById('status-text').innerText = `已同步: ${new Date().toLocaleTimeString('zh-TW', {hour12:false})}`;
                 document.getElementById('status-dot').className = "w-2.5 h-2.5 rounded-full status-dot-green";
                 setTimeout(() => document.getElementById('progress-wrapper').style.opacity = "0", 1000);
                 document.getElementById('refresh-icon').classList.remove('animate-spin');
 
-                // 2. 核心邏輯：如果是初次解鎖且資料都好了，隱藏 Loading，顯示主程式
                 if (!isAppUnlocked) {
                     isAppUnlocked = true;
                     setTimeout(() => {
                         document.getElementById('loading-overlay').classList.add('hidden-overlay');
                         document.getElementById('main-app').style.display = 'block';
-                        // 確保切換後捲動到頂部
                         window.scrollTo(0,0);
-                    }, 500); // 稍微延遲讓使用者看到 100%
+                    }, 500); 
                 }
 
-                // 3. 繪製圖表
                 if (!initialChartLoaded) {
                     initialChartLoaded = true;
                     updateTrendChart();
@@ -484,7 +500,7 @@
             chartSyncTimer = setInterval(() => {
                 updateTrendChart();
                 if (currentId === 'total') renderPieCharts();
-            }, 120000); // 2 分鐘 (120,000ms)
+            }, 120000); 
         }
 
         async function fetchFX() {
